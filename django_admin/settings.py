@@ -39,7 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django.contrib.gis',
     'django.contrib.postgres',
-    'django_admin_mis'
+    'django_admin_mis',
+    'rest_framework',
 ]
 
 MIDDLEWARE = [
