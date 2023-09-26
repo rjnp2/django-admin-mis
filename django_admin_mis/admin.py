@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AllfieldModel
+from .models import AllFieldModel
 
 # Register your models here.
-admin.site.register(AllfieldModel)
+admin.site.register(AllFieldModel)
