@@ -9,7 +9,7 @@ class AdminMenuSerializer(serializers.Serializer):
     data = serializers.JSONField()
 
 class ActionSerializer(serializers.Serializer):
-    ids = serializers.CharField(required=True)
+    item_ids = serializers.CharField(required=True)  # Renamed 'ids' to 'item_ids'
     action = serializers.CharField(required=True)
 
 class DynamicSerializer(serializers.ModelSerializer):
@@ -22,7 +22,7 @@ class DynamicSerializer(serializers.ModelSerializer):
         fields = kwargs.pop('fields', None)
 
         if not model:
-            raise ValueError('model should not be empty.')
+            raise ValueError('The "model" parameter should not be empty.')  # Improved error message
         
         self.Meta.model = model
         if fields:
@@ -47,6 +47,7 @@ class DynamicSerializer(serializers.ModelSerializer):
                 ret[field.field_name] = None
             else:
                 if isinstance(attribute, PKOnlyObject):
+                    # Construct a dictionary with 'id' and 'value' fields for PKOnlyObject
                     value = getattr(instance, field.field_name).__str__()
                     ret[field.field_name] = {
                         'id' : field.to_representation(attribute),
@@ -54,6 +55,7 @@ class DynamicSerializer(serializers.ModelSerializer):
                     }
                     
                 else:
+                    # Serialize the field normally
                     ret[field.field_name] = field.to_representation(attribute)
 
         return ret

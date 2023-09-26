@@ -16,8 +16,8 @@ from rest_framework.response import Response
 from .permissions import CustomStaffPermission
 from .serializers import (ActionSerializer, AdminMenuSerializer,
                           DynamicSerializer)
-from .utils import (get_default_values, level_to_human_readable,
-                    python_validator_dict, simple_field_form)
+from .utils import (format_field_name, format_message_level, get_default_value,
+                    get_validator_info)
 
 
 # Create your views here.
@@ -28,120 +28,188 @@ class AdminModelViewSet(viewsets.ViewSet,
     filter_backends = []
     
     def get_model_register_admin(self):
+        # Extract the 'app_name' and 'model_name' from the URL kwargs
         app_name = self.kwargs['app_name'].lower()
         model_name = self.kwargs['model_name'].lower()
-        
-        try:
-            model = apps.get_model(app_name, model_name)
-        except:
-            raise ParseError({'message' : 'Model doesnot exist.'})
 
         try:
+            # Attempt to get the model based on the 'app_name' and 'model_name'
+            model = apps.get_model(app_name, model_name)
+        except:
+            # Handle the case where the model does not exist
+            raise ParseError({'message': 'Model does not exist.'})
+
+        try:
+            # Attempt to retrieve the registered admin instance for the model
             register_app = admin.site._registry[model]
         except:
-            raise ParseError({'message' : 'Admin register doesnot exist.'})
-        
+            # Handle the case where the model is not registered in the admin site
+            raise ParseError({'message': 'Admin register does not exist.'})
+
+        # Return the retrieved model and its associated admin instance
         return model, register_app
     
     def get_object(self, register_app):
+        # Extract the primary key ('pk') from the URL kwargs
         pk = self.kwargs['pk']
+
         try:
+            # Attempt to convert the primary key to an integer
             pk = int(pk)
-        except:
-            raise ParseError({'message' : 'id must be number.'})
-        
+        except ValueError:
+            # Handle the case where the primary key is not a valid integer
+            raise ParseError({'message': 'ID must be a number.'})
+
+        # Attempt to retrieve the object using the register_app's get_object method
         instance = register_app.get_object(self.request, pk)
-        
+
         if instance is None:
+            # Handle the case where the object is not found
             raise ParseError({
                 "detail": "Not found."
             })
-        
-        # May raise a permission denied
+
+        # Check object-level permissions (may raise a permission denied exception)
         self.check_object_permissions(self.request, instance)
 
+        # Return the retrieved instance
         return instance
-    
+
     def get_objects(self, register_app):
-        pks = self.kwargs['pk']
-        pks = pks.split(',')
+        '''
+        The get_objects method retrieves a list of objects based on a comma-separated list of primary keys from the URL kwargs.
+        '''
+        # Extract the comma-separated primary key values from the URL kwargs
+        pk_values = self.kwargs['pk'].split(',')
         
+        # Initialize an empty list to store retrieved instances
         instances = []
-        for pk in pks:
-            try:
-                pk = int(pk)
-            except:
-                raise ParseError({'message' : 'id must be number.'})
         
+        for pk in pk_values:
+            try:
+                # Attempt to convert the primary key value to an integer
+                pk = int(pk)
+            except ValueError:
+                # Handle the case where the primary key is not a valid integer
+                raise ParseError({'message': 'ID must be a number.'})
+            
+            # Attempt to retrieve the object using the register_app's get_object method
             instance = register_app.get_object(self.request, pk)
             
             if instance is None:
+                # Handle the case where the object is not found
                 raise ParseError({
-                    "detail": f"Id {pk} not found."
+                    "detail": f"Object with ID {pk} not found."
                 })
             
-            # May raise a permission denied
+            # Check object-level permissions (may raise a permission denied exception)
             self.check_object_permissions(self.request, instance)
+            
+            # Add the retrieved instance to the list
             instances.append(instance)
+        
+        # Return the list of retrieved instances
         return instances
     
     def get_queryset(self):
         return []
     
     def get_serializer(self, *args, **kwargs):
+        """_summary_
+        The get_serializer method in your Django view
+        is responsible for determining which serializer class
+        to use based on the action being performed. 
+        
+        If the action is 'list' or 'action_perform', 
+        it uses a specific serializer class (get_serializer_class()),
+        and if it's another action, it uses a DynamicSerializer class.
+        
+        Returns:
+            serializer_class: serializer class
+        """
+        
+        # Set the context for the serializer
         kwargs.setdefault('context', self.get_serializer_context())
+
+        # Check the action to determine the serializer class
         if self.action in ['list', 'action_perform']:
+            # Use a specific serializer class for list and action_perform actions
             serializer_class = self.get_serializer_class()
             return serializer_class(*args, **kwargs)
         else:
+            # For other actions, use a DynamicSerializer class
             model = kwargs.pop('model', None)
             if model is None:
+                # If model is not provided in kwargs, get it from the method you defined
                 model, _ = self.get_model_register_admin()
 
             serializer_class = DynamicSerializer
             return serializer_class(model=model, fields='__all__', *args, **kwargs)
-    
+
     def get_list_display_data(self, data):
+        """_summary_
+        The get_list_display_data method seems to be related to preparing data 
+        for list display, 
+        specifically for displaying the ID and a human-readable representation of objects in a list.
+
+        Args:
+            data (queryset): list of queryset
+
+        Returns:
+            data (list): list of serialized data
+        """
+        
+        # Prepare data for list display, including ID and human-readable representation
         return [
             {
-                'id' : dat.id,
-                'display' : dat.__str__(),
-            } for dat in data
+                'id': obj.id,
+                'display': str(obj),  # Use __str__() method to get human-readable representation
+            } for obj in data
         ]
     
     def get_field_meta(self, request, field, editable, parent_label=None, admin_field=None):
-        validators = python_validator_dict(field)
-        field_type = simple_field_form(field)
+        """_summary_
+        The get_field_meta method appears to be a utility method used for extracting metadata
+        about a Django model field. It collects various pieces of information about the field,
+        such as its name, verbose name, validators, required status, help text, field type, 
+        and more, depending on the type of field.
+        """
         
-        defaults = get_default_values(field)
-            
-        if field_type in (
-            'foreign key', 'many-to-many relationship',
-            'one-to-one relationship'
-        ):
+        # Get validator information for the field
+        validators = get_validator_info(field)
+
+        # Format the field type name
+        field_type = format_field_name(field)
+
+        # Get default value for the field
+        defaults = get_default_value(field)
+
+        if field_type in ('foreign key', 'many-to-many relationship', 'one-to-one relationship'):
             if parent_label and parent_label == field.related_model._meta.label:
                 data = {
-                    'name' : field.name,
-                    'verbose_name' : field.verbose_name,
-                    'required' : field.blank,
-                    'help_text' : field.help_text,
-                    "field_type" : field_type,
-                    "editable" : False,
-                    "inline_parent" : True,
-                    'pk_related_name' : field.related_query_name()
+                    'name': field.name,
+                    'verbose_name': field.verbose_name,
+                    'required': field.blank,
+                    'help_text': field.help_text,
+                    "field_type": field_type,
+                    "editable": False,
+                    "inline_parent": True,
+                    'pk_related_name': field.related_query_name()
                 }
-                
             else:
-                related_model  = field.related_model
-                model_name  = related_model._meta.model_name
-                app  = related_model._meta.app_label
-                api_link  = f"{request.build_absolute_uri('/')}api/v1/admin/{app}/{model_name}/"
+                related_model = field.related_model
+                model_name = related_model._meta.model_name
+                app = related_model._meta.app_label
+
+                # Build the API link for related models
+                api_link = f"{request.build_absolute_uri('/')}api/v1/admin/{app}/{model_name}/"
                 api_link = api_link.replace(' ', '-').replace('_', '-')
-                
+
                 query_params = ['filter_list=true', ]
+
                 if admin_field and hasattr(admin_field, 'queryset'):
                     queryset = admin_field.queryset
-                    
+
                     for query in queryset.query.where.children:
                         if not isinstance(query, Q):
                             try:
@@ -151,151 +219,184 @@ class AdminModelViewSet(viewsets.ViewSet,
                                 query_params.append(f'{field_name}__{lookup}={value}')
                             except Exception as e:
                                 print(e)
-                                
-                query_params = '&'.join(query_params)
-                api_link += f'?{query_params}'
-            
+
+                    query_params = '&'.join(query_params)
+                    api_link += f'?{query_params}'
+
                 data = {
-                    'name' : field.name,
-                    'query' : field._limit_choices_to if hasattr(field, '_limit_choices_to') else None,
-                    'verbose_name' : field.verbose_name,
-                    'required' : not field.blank,
-                    'help_text' : field.help_text,
-                    "field_type" : field_type,
-                    "editable" : editable,
-                    'api_link' : api_link,
+                    'name': field.name,
+                    'query': field._limit_choices_to if hasattr(field, '_limit_choices_to') else None,
+                    'verbose_name': field.verbose_name,
+                    'required': not field.blank,
+                    'help_text': field.help_text,
+                    "field_type": field_type,
+                    "editable": editable,
+                    'api_link': api_link,
                 }
-        
         else:
+            # For non-relational fields
             data = {
-                'name' : field.name,
-                'verbose_name' : field.verbose_name,
-                'validators' : validators,
-                'required' : not field.blank,
-                'help_text' : field.help_text,
-                "field_type" : field_type,
-                'editable' : editable,
-                'defaults' : defaults,
-                'choices' : field.flatchoices,
+                'name': field.name,
+                'verbose_name': field.verbose_name,
+                'validators': validators,
+                'required': not field.blank,
+                'help_text': field.help_text,
+                "field_type": field_type,
+                'editable': editable,
+                'defaults': defaults,
+                'choices': field.flatchoices,
             }
-            
+
             if hasattr(field, 'dim'):
                 data['dim'] = field.dim
-            
+
             if hasattr(field, 'srid'):
                 data['srid'] = field.srid
-            
+
             if hasattr(field, 'geography'):
                 data['geography'] = field.geography
-                
+
             if hasattr(field, '_extent'):
                 data['extent'] = field._extent
-                
+
             if hasattr(field, '_tolerance'):
                 data['tolerance'] = field._tolerance
-            
+
             if hasattr(field, 'base_field'):
                 base_field = field.base_field
-                base_validators = python_validator_dict(base_field)
-                base_field_type = simple_field_form(base_field)
-                
+                base_validators = get_validator_info(base_field)
+                base_field_type = format_field_name(base_field)
+
                 data['base_data'] = {
-                    'validators' : base_validators,
-                    'required' : not base_field.blank,
-                    'help_text' : base_field.help_text,
-                    "field_type" : base_field_type,
-                    'editable' : editable,
-                    'defaults' : get_default_values(base_field),
-                    'choices' : base_field.flatchoices,
+                    'validators': base_validators,
+                    'required': not base_field.blank,
+                    'help_text': base_field.help_text,
+                    "field_type": base_field_type,
+                    'editable': editable,
+                    'defaults': get_default_value(base_field),
+                    'choices': base_field.flatchoices,
                 }
-                
+
         return data
-                
+           
     def get_fields_meta_data(self, request, fields, admin_fields):
+        """_summary_
+        The get_fields_meta_data method seems to be used for extracting 
+        metadata about multiple fields in a Django model. 
+        
+        It collects information about each field, such as its name, 
+        verbose name, validators, required status, help text, 
+        field type, and more. Additionally, it handles admin fields 
+        and includes additional information for them.
+        """
         data = []
+
+        # Loop through regular model fields
         for field in fields:
-            
             if field.auto_created:
                 if hasattr(field, 'primary_key') and field.primary_key:
                     pass
                 else:
                     continue
-                
+
             admin_field = admin_fields.pop(field.name, None)
             editable = not any([not field.editable, admin_field is None, field.primary_key])
-            
+
+            # Call get_field_meta to extract metadata for the field
             result = self.get_field_meta(request, field, editable, admin_field=admin_field)
             data.append(result)
-        
+
+        # Loop through remaining admin fields
         for key, value in admin_fields.items():
-            
-            validators = python_validator_dict(value)
-            
+            validators = get_validator_info(value)
+
             if hasattr(value, 'max_length'):
                 max_length = value.max_length
             elif hasattr(value, 'max_value'):
                 max_length = value.max_value
             else:
                 max_length = None
-                
+
             data.append({
-                'name' : key,
-                'verbose_name' : value.label or key,
-                'validators' : validators,
-                'required' : value.required,
-                'help_text' : value.help_text,
-                'max_length' : max_length,
-                "field_type" : value.widget.input_type if hasattr(value.widget, 'input_type') else 'string',
-                'editable' : True,
-                'defaults' : None,
-                'choices' : value._get_choices() if hasattr(value, '_get_choices') else [],
+                'name': key,
+                'verbose_name': value.label or key,
+                'validators': validators,
+                'required': value.required,
+                'help_text': value.help_text,
+                'max_length': max_length,
+                "field_type": value.widget.input_type if hasattr(value.widget, 'input_type') else 'string',
+                'editable': True,
+                'defaults': None,
+                'choices': value._get_choices() if hasattr(value, '_get_choices') else [],
             })
-            
-        return data 
+
+        return data
     
     def get_inline_fields_meta_data(self, request, fields, parent_label, read_only_data):
+        """_summary_
+        The get_inline_fields_meta_data method appears to be used for extracting 
+        metadata about fields within an inline model class in Django. 
+        
+        This method collects information about each field, similar to the 
+        get_fields_meta_data method. 
+        Additionally, it seems to handle the pk_related_name field separately.
+        """
         data = []
+        pk_related_name = None  # Initialize pk_related_name
+
         for field in fields:
             if field.auto_created:
                 if hasattr(field, 'primary_key') and field.primary_key:
                     pass
                 else:
                     continue
-            
+
             editable = not any([not field.editable, field.name in read_only_data, field.primary_key])
+            
+            # Call get_field_meta to extract metadata for the field
             result = self.get_field_meta(request, field, editable, parent_label)
-            pk_related_name =  result.pop('pk_related_name', None)
+            
+            # Extract pk_related_name if available
+            pk_related_name = result.pop('pk_related_name', None)
+            
             data.append(result)
+
         return data, pk_related_name
     
     def get_inline_field_data(self, request, final_data, inlines, nest_inline_name=None):
+        """_summary_
+        The get_inline_field_data method seems to be responsible for collecting metadata 
+        and information about inline models in a Django admin view. 
+        """
         inline_data = []
-        for inline_model in inlines:
         
+        for inline_model in inlines:
+            # Get read-only fields and parent label
             read_only_data = inline_model.get_readonly_fields(request)
             parent_label = inline_model.parent_model._meta.label
             
+            # Get fields and related name from inline models
             fields = inline_model.model._meta.get_fields()
             fields, pk_related_name = self.get_inline_fields_meta_data(
-                request=request, fields=fields, 
+                request=request, fields=fields,
                 parent_label=parent_label, read_only_data=read_only_data
             )
             
+            # Determine inline name
             if nest_inline_name is None:
                 inline_name = inline_model.model._meta.verbose_name.lower().replace(' ', '_')
             else:
                 inline_name = nest_inline_name, pk_related_name
-                
+            
             data = {
-                'fields' : fields,
-                'model_name' : inline_model.model._meta.model_name,
-                'inline_name' : inline_name,
-                
-                'app_name' : inline_model.model._meta.app_label,
+                'fields': fields,
+                'model_name': inline_model.model._meta.model_name,
+                'inline_name': inline_name,
+                'app_name': inline_model.model._meta.app_label,
                 'max_num': inline_model.get_max_num(request),
                 'min_num': inline_model.get_min_num(request),
                 'extra': inline_model.get_extra(request),
-                'perms' : {
+                'perms': {
                     "add": inline_model.has_add_permission(request, None),
                     "change": inline_model.has_change_permission(request, None),
                     "delete": inline_model.has_delete_permission(request, None),
@@ -303,20 +404,26 @@ class AdminModelViewSet(viewsets.ViewSet,
                 }
             }
             
+            # Handle nested inlines if available
             if hasattr(inline_model, 'get_inline_instances'):
                 nested_inlines = inline_model.get_inline_instances(request)
                 if nested_inlines:
-                    inline_name += '-0-'
                     self.get_inline_field_data(request, data, nested_inlines, inline_name)
                     
             inline_data.append(data)
         
         final_data['inlines'] = inline_data
-    
+
     def get_inline_object_data(self, request, final_data, inline_instances, parent_instance):
+        '''
+        The get_inline_object_data method appears to be responsible for 
+        retrieving data for inline instances associated with a parent instance in a Django admin view. 
+        '''
         inline_data = []
+        
         for inline_instance in inline_instances:
-            kwargs = {inline_instance.get_formset(request, parent_instance).fk.name:parent_instance.id}
+            # Prepare filter keyword arguments to retrieve related objects
+            kwargs = {inline_instance.get_formset(request, parent_instance).fk.name: parent_instance.id}
             
             inline_model = inline_instance.model
             objects = list(inline_model.objects.filter(**kwargs))
@@ -327,27 +434,28 @@ class AdminModelViewSet(viewsets.ViewSet,
             nested_data = []
             for instance in objects:
                 data = {
-                    'data' : self.get_serializer(model=inline_model, instance=instance).data,
-                    'perms' : {
+                    'data': self.get_serializer(model=inline_model, instance=instance).data,
+                    'perms': {
                         "add": inline_instance.has_add_permission(request, instance),
                         "change": inline_instance.has_change_permission(request, instance),
                         "delete": inline_instance.has_delete_permission(request, instance),
                         "view": inline_instance.has_view_permission(request, instance)
                     },
-                'model_name' : inline_model._meta.model_name,
-                'app_name' : inline_model._meta.app_label,
+                    'model_name': inline_model._meta.model_name,
+                    'app_name': inline_model._meta.app_label,
                 }
                 
+                # Handle nested inlines if available
                 if hasattr(inline_instance, 'get_inline_instances'):
                     nest_inlines = inline_instance.get_inline_instances(request, instance)
                     if nest_inlines and instance:
                         self.get_inline_object_data(request, data, nest_inlines, instance)
-                    
+                        
                 nested_data.append(data)
-                
+            
             if nested_data:
                 inline_data.append(nested_data)
-                
+        
         if inline_data:
             final_data['inlines'] = inline_data
     
@@ -483,7 +591,7 @@ class AdminModelViewSet(viewsets.ViewSet,
             for filter_data in filter_specs:
                 
                 if hasattr(filter_data, 'field'):
-                    field_type = simple_field_form(filter_data.field)
+                    field_type = format_field_name(filter_data.field)
                 else:
                     field_type = None
                 
@@ -675,14 +783,14 @@ class AdminModelViewSet(viewsets.ViewSet,
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        ids = serializer.validated_data['ids']
+        item_ids = serializer.validated_data['item_ids']
         action = serializer.validated_data['action']
             
         try:
-            ids = ids.split(',')
+            item_ids = item_ids.split(',')
         except:
             raise ParseError({
-                'message' : 'Error while split items ids.'
+                'message' : 'Error while split items item_ids.'
             })
             
         app_name = kwargs['app_name'].lower()
@@ -694,9 +802,9 @@ class AdminModelViewSet(viewsets.ViewSet,
             raise ParseError({'message' : 'Model doesnot exist.'})
 
         try:
-            queryset = model.objects.filter(id__in =ids)
+            queryset = model.objects.filter(id__in =item_ids)
         except:
-            raise ParseError({'message' : 'Error due to getting items from ids.'})
+            raise ParseError({'message' : 'Error due to getting items from item_ids.'})
         
         if not queryset.exists():
             raise ParseError({
@@ -720,7 +828,7 @@ class AdminModelViewSet(viewsets.ViewSet,
         all_messages = messages.get_messages(request)
         data = [{
             'message_content' : message.message, 
-            'message_level' : level_to_human_readable(message.level)} 
+            'message_level' : format_message_level(message.level)} 
             for message in all_messages
         ]
                 
